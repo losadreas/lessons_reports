@@ -1,12 +1,30 @@
 import streamlit as st
 import pandas as pd
-#import sqlite3
 from datetime import date
-
 import os
+import io
+import logging
 
+# -------------------------
+# CONFIG
+# -------------------------
 DATA_FILE = "lessons.csv"
+LOG_FILE = "app.log"
 
+# -------------------------
+# LOGGING
+# -------------------------
+logging.basicConfig(
+    filename=LOG_FILE,
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
+
+logging.info("Application started")
+
+# -------------------------
+# DATA FUNCTIONS (CSV)
+# -------------------------
 def load_lessons():
     if os.path.exists(DATA_FILE):
         return pd.read_csv(DATA_FILE, parse_dates=["lesson_date"])
@@ -16,24 +34,6 @@ def load_lessons():
 def save_lessons(df):
     df.to_csv(DATA_FILE, index=False)
 
-
-# -------------------------
-# БАЗА ДАННЫХ
-# -------------------------
-#conn = sqlite3.connect("lessons.db", check_same_thread=False)
-#cursor = conn.cursor()
-
-#cursor.execute("""
-# CREATE TABLE IF NOT EXISTS lessons (
-#     id INTEGER PRIMARY KEY AUTOINCREMENT,
-#     student TEXT NOT NULL,
-#     lesson_date DATE NOT NULL
-# )
-#conn.commit()
-
-# -------------------------
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-# -------------------------
 def add_lesson(student, lesson_date):
     df = load_lessons()
     new_row = pd.DataFrame([{
@@ -42,85 +42,85 @@ def add_lesson(student, lesson_date):
     }])
     df = pd.concat([df, new_row], ignore_index=True)
     save_lessons(df)
-
-# def load_lessons():
-#     return pd.read_sql("SELECT * FROM lessons", conn, parse_dates=["lesson_date"])
+    logging.info(f"Lesson added: {student}, {lesson_date}")
 
 # -------------------------
-# ИНТЕРФЕЙС
+# UI
 # -------------------------
-st.title("Учёт уроков")
+st.title("Lesson Reports")
 
 tab1, tab2, tab3, tab4 = st.tabs([
-    "➕ Добавить урок",
-    "📥 Импорт Excel",
-    "📊 Отчёт по ученику",
-    "📤 Экспорт Excel"
+    "➕ Add lesson",
+    "📥 Import Excel",
+    "📊 Student report",
+    "📤 Export Excel"
 ])
 
 # -------------------------
-# 1. ДОБАВЛЕНИЕ УРОКА
+# TAB 1 — ADD LESSON
 # -------------------------
 with tab1:
-    st.subheader("Добавить урок вручную")
+    st.subheader("Add lesson manually")
 
-    student = st.text_input("Имя ученика")
-    lesson_date = st.date_input("Дата урока", value=date.today())
+    student = st.text_input("Student name")
+    lesson_date = st.date_input("Lesson date", value=date.today())
 
-    if st.button("Добавить"):
-        if student:
-            add_lesson(student, lesson_date)
-            st.success("Урок добавлен")
+    if st.button("Add lesson"):
+        if student.strip():
+            add_lesson(student.strip(), lesson_date)
+            st.success("Lesson added")
         else:
-            st.error("Введите имя ученика")
+            st.error("Student name is required")
 
 # -------------------------
-# 2. ИМПОРТ EXCEL
+# TAB 2 — IMPORT EXCEL
 # -------------------------
 with tab2:
-    st.subheader("Импорт Excel")
+    st.subheader("Import from Excel")
 
-    year = st.number_input("Год", min_value=2020, max_value=2100, value=date.today().year)
-    month = st.number_input("Месяц", min_value=1, max_value=12, value=date.today().month)
+    year = st.number_input("Year", min_value=2020, max_value=2100, value=date.today().year)
+    month = st.number_input("Month", min_value=1, max_value=12, value=date.today().month)
 
-    uploaded = st.file_uploader("Excel файл", type=["xlsx"])
+    uploaded = st.file_uploader("Excel file (.xlsx)", type=["xlsx"])
 
-    if uploaded and st.button("Импортировать"):
-        df = pd.read_excel(uploaded)
-
+    if uploaded and st.button("Import"):
+        df_excel = pd.read_excel(uploaded)
         errors = 0
+        imported = 0
 
-        for _, row in df.iterrows():
+        for _, row in df_excel.iterrows():
             student = str(row[1]).strip()
 
-            # пропускаем пустые имена
             if not student or student == "nan":
                 continue
 
             try:
-                day = int(float(row[2]))  # работает с 25, 25.0, "25"
+                day = int(float(row[2]))
                 lesson_date = date(year, month, day)
                 add_lesson(student, lesson_date)
+                imported += 1
             except Exception:
                 errors += 1
-                continue
+                logging.warning(f"Import error: {row}")
 
         if errors > 0:
-            st.warning(f"Импорт завершён, пропущено строк с ошибками: {errors}")
+            st.warning(f"Imported: {imported}, skipped rows: {errors}")
         else:
-            st.success("Импорт завершён успешно")
+            st.success(f"Imported {imported} lessons")
 
 # -------------------------
-# 3. ОТЧЁТ ПО УЧЕНИКУ
+# TAB 3 — STUDENT REPORT
 # -------------------------
 with tab3:
-    st.subheader("Отчёт по ученику")
+    st.subheader("Student report")
 
     df = load_lessons()
 
-    if not df.empty:
+    if df.empty:
+        st.info("No data available")
+    else:
         students = sorted(df["student"].unique())
-        student = st.selectbox("Выберите ученика", students)
+        student = st.selectbox("Select student", students)
 
         student_df = df[df["student"] == student].copy()
         student_df["year_month"] = student_df["lesson_date"].dt.to_period("M")
@@ -128,24 +128,30 @@ with tab3:
         for period, group in student_df.groupby("year_month"):
             st.markdown(f"### {period}")
             group = group.sort_values("lesson_date")
+
             for i, d in enumerate(group["lesson_date"], start=1):
                 st.write(f"{i}) {d.strftime('%d.%m.%Y')}")
-            st.write(f"**Итого: {len(group)} занятий**")
-    else:
-        st.info("Пока нет данных")
+
+            st.write(f"**Total: {len(group)} lessons**")
 
 # -------------------------
-# 4. ЭКСПОРТ EXCEL
+# TAB 4 — EXPORT EXCEL
 # -------------------------
 with tab4:
-    st.subheader("Экспорт Excel по месяцу")
+    st.subheader("Export to Excel")
 
-    year = st.number_input("Год экспорта", min_value=2020, max_value=2100, value=date.today().year, key="exp_year")
-    month = st.number_input("Месяц экспорта", min_value=1, max_value=12, value=date.today().month, key="exp_month")
+    year = st.number_input(
+        "Export year", min_value=2020, max_value=2100,
+        value=date.today().year, key="exp_year"
+    )
+    month = st.number_input(
+        "Export month", min_value=1, max_value=12,
+        value=date.today().month, key="exp_month"
+    )
 
     df = load_lessons()
 
-    if st.button("Сформировать Excel"):
+    if st.button("Generate Excel"):
         mask = (
             (df["lesson_date"].dt.year == year) &
             (df["lesson_date"].dt.month == month)
@@ -158,19 +164,19 @@ with tab4:
                 rows.append([i, student, d.day])
 
         export_df = pd.DataFrame(rows, columns=[
-            "№ урока в месяце",
-            "Имя ученика",
-            "День месяца"
+            "Lesson # in month",
+            "Student",
+            "Day of month"
         ])
-
-        import io
 
         output = io.BytesIO()
         export_df.to_excel(output, index=False)
+
         st.download_button(
-            "Скачать Excel",
+            "Download Excel",
             data=output.getvalue(),
             file_name=f"lessons_{year}_{month}.xlsx"
         )
 
+        logging.info(f"Excel exported: {year}-{month}")
 
