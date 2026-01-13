@@ -73,13 +73,27 @@ with tab2:
     if uploaded and st.button("Импортировать"):
         df = pd.read_excel(uploaded)
 
-        for _, row in df.iterrows():
-            student = row[1]
-            day = int(row[2])
-            lesson_date = date(year, month, day)
-            add_lesson(student, lesson_date)
+        errors = 0
 
-        st.success("Импорт завершён")
+        for _, row in df.iterrows():
+            student = str(row[1]).strip()
+
+            # пропускаем пустые имена
+            if not student or student == "nan":
+                continue
+
+            try:
+                day = int(float(row[2]))  # работает с 25, 25.0, "25"
+                lesson_date = date(year, month, day)
+                add_lesson(student, lesson_date)
+            except Exception:
+                errors += 1
+                continue
+
+        if errors > 0:
+            st.warning(f"Импорт завершён, пропущено строк с ошибками: {errors}")
+        else:
+            st.success("Импорт завершён успешно")
 
 # -------------------------
 # 3. ОТЧЁТ ПО УЧЕНИКУ
