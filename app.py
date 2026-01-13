@@ -1,35 +1,50 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
+#import sqlite3
 from datetime import date
+
+import os
+
+DATA_FILE = "lessons.csv"
+
+def load_lessons():
+    if os.path.exists(DATA_FILE):
+        return pd.read_csv(DATA_FILE, parse_dates=["lesson_date"])
+    else:
+        return pd.DataFrame(columns=["student", "lesson_date"])
+
+def save_lessons(df):
+    df.to_csv(DATA_FILE, index=False)
+
 
 # -------------------------
 # БАЗА ДАННЫХ
 # -------------------------
-conn = sqlite3.connect("lessons.db", check_same_thread=False)
-cursor = conn.cursor()
+#conn = sqlite3.connect("lessons.db", check_same_thread=False)
+#cursor = conn.cursor()
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS lessons (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    student TEXT NOT NULL,
-    lesson_date DATE NOT NULL
-)
-""")
-conn.commit()
+#cursor.execute("""
+# CREATE TABLE IF NOT EXISTS lessons (
+#     id INTEGER PRIMARY KEY AUTOINCREMENT,
+#     student TEXT NOT NULL,
+#     lesson_date DATE NOT NULL
+# )
+#conn.commit()
 
 # -------------------------
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # -------------------------
 def add_lesson(student, lesson_date):
-    cursor.execute(
-        "INSERT INTO lessons (student, lesson_date) VALUES (?, ?)",
-        (student, lesson_date)
-    )
-    conn.commit()
+    df = load_lessons()
+    new_row = pd.DataFrame([{
+        "student": student,
+        "lesson_date": lesson_date
+    }])
+    df = pd.concat([df, new_row], ignore_index=True)
+    save_lessons(df)
 
-def load_lessons():
-    return pd.read_sql("SELECT * FROM lessons", conn, parse_dates=["lesson_date"])
+# def load_lessons():
+#     return pd.read_sql("SELECT * FROM lessons", conn, parse_dates=["lesson_date"])
 
 # -------------------------
 # ИНТЕРФЕЙС
