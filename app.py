@@ -89,8 +89,11 @@ with tab2:
 
     if uploaded and st.button("Import"):
         df_excel = pd.read_excel(uploaded)
-        errors = 0
+
+        df = load_lessons()  # <-- ВАЖНО: загружаем ОДИН раз
+
         imported = 0
+        errors = 0
 
         for _, row in df_excel.iterrows():
             student = str(row[1]).strip()
@@ -101,16 +104,28 @@ with tab2:
             try:
                 day = int(float(row[2]))
                 lesson_date = date(year, month, day)
-                add_lesson(student, lesson_date)
+
+                df = pd.concat([
+                    df,
+                    pd.DataFrame([{
+                        "student": student,
+                        "lesson_date": lesson_date
+                    }])
+                ], ignore_index=True)
+
                 imported += 1
+
             except Exception:
                 errors += 1
                 logging.warning(f"Import error: {row}")
+
+        save_lessons(df)  # <-- СОХРАНЯЕМ ОДИН РАЗ
 
         if errors > 0:
             st.warning(f"Imported: {imported}, skipped rows: {errors}")
         else:
             st.success(f"Imported {imported} lessons")
+
 
 # -------------------------
 # TAB 3 — STUDENT REPORT
