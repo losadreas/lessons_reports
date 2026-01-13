@@ -134,8 +134,14 @@ with tab4:
             "День месяца"
         ])
 
+        import io
+
+        output = io.BytesIO()
+        export_df.to_excel(output, index=False)
         st.download_button(
             "Скачать Excel",
-            data=export_df.to_excel(index=False),
+            data=output.getvalue(),
             file_name=f"lessons_{year}_{month}.xlsx"
         )
+
+
