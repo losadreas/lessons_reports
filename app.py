@@ -27,9 +27,13 @@ logging.info("Application started")
 # -------------------------
 def load_lessons():
     if os.path.exists(DATA_FILE):
-        return pd.read_csv(DATA_FILE, parse_dates=["lesson_date"])
+        df = pd.read_csv(DATA_FILE)
+        df["lesson_date"] = pd.to_datetime(df["lesson_date"], errors="coerce")
+        df = df.dropna(subset=["lesson_date"])
+        return df
     else:
         return pd.DataFrame(columns=["student", "lesson_date"])
+
 
 def save_lessons(df):
     df.to_csv(DATA_FILE, index=False)
