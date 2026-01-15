@@ -241,3 +241,4 @@ with tab6:
         if st.button("Merge students"):
             merge_students(source, target)
             st.success(f"Merged '{source}' into '{target}'")
+            st.rerun()
