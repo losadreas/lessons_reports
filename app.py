@@ -1,188 +1,107 @@
 import streamlit as st
 import pandas as pd
-import hashlib
-import io
+import sqlite3
 from datetime import date, datetime
+import io
 
-# -------------------------
-# SESSION STATE
-# -------------------------
-if "data" not in st.session_state:
-    st.session_state.data = pd.DataFrame(
-        columns=["LessonID", "Student", "LessonDate"]
+# =====================
+# DATABASE (SESSION)
+# =====================
+conn = sqlite3.connect(":memory:", check_same_thread=False)
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS lessons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student TEXT NOT NULL,
+    lesson_date DATE NOT NULL
+)
+""")
+conn.commit()
+
+# =====================
+# DB HELPERS
+# =====================
+def add_lesson(student, lesson_date):
+    cursor.execute(
+        "INSERT INTO lessons (student, lesson_date) VALUES (?, ?)",
+        (student, lesson_date)
+    )
+    conn.commit()
+
+def load_lessons():
+    return pd.read_sql(
+        "SELECT * FROM lessons",
+        conn,
+        parse_dates=["lesson_date"]
     )
 
-if "imported_files" not in st.session_state:
-    st.session_state.imported_files = set()
+def merge_students(old_name, new_name):
+    cursor.execute(
+        "UPDATE lessons SET student = ? WHERE student = ?",
+        (new_name, old_name)
+    )
+    conn.commit()
 
-# -------------------------
-# HELPERS
-# -------------------------
-def file_hash(file_bytes):
-    return hashlib.md5(file_bytes).hexdigest()
+# =====================
+# UI
+# =====================
+st.title("Lesson Reports")
 
-def normalize_columns(df):
-    df.columns = [c.strip().lower() for c in df.columns]
-    return df
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📥 Import Monthly",
+    "📤 Export Monthly",
+    "📥 Import Yearly",
+    "📤 Export Yearly",
+    "📊 Student Report"
+])
 
-def load_excel(file, year=None, month=None):
-    df = pd.read_excel(file)
-    df = normalize_columns(df)
+# =====================
+# TAB 1 — IMPORT MONTHLY
+# =====================
+with tab1:
+    st.subheader("Import monthly Excel")
 
-    cols = set(df.columns)
+    year = st.number_input("Year", 2020, 2100, date.today().year)
+    month = st.number_input("Month", 1, 12, date.today().month)
 
-    # ---------- YEARLY FORMAT ----------
-    if {"student", "lessondate"}.issubset(cols):
-        df = df.rename(columns={
-            "student": "Student",
-            "lessondate": "LessonDate",
-            "lessonid": "LessonID"
-        })
+    uploaded = st.file_uploader("Excel file (.xlsx)", type=["xlsx"])
 
-        if "LessonID" not in df.columns:
-            df["LessonID"] = range(1, len(df) + 1)
+    if uploaded and st.button("Import"):
+        df = pd.read_excel(uploaded)
 
-        df["LessonDate"] = pd.to_datetime(df["LessonDate"])
-
-        return df[["LessonID", "Student", "LessonDate"]]
-
-    # ---------- MONTHLY FORMAT ----------
-    if {"имя ученика", "день месяца"}.issubset(cols) or {"student", "day of month"}.issubset(cols):
-        if not year or not month:
-            raise ValueError("Year and month are required for monthly import")
-
-        # определяем колонки
-        student_col = "имя ученика" if "имя ученика" in cols else "student"
-        day_col = "день месяца" if "день месяца" in cols else "day of month"
-
-        rows = []
-        for i, row in df.iterrows():
+        imported = 0
+        for _, row in df.iterrows():
             try:
-                student = str(row[student_col]).strip()
-                day = int(float(row[day_col]))
+                student = str(row[1]).strip()
+                day = int(float(row[2]))
                 lesson_date = date(year, month, day)
-
-                rows.append({
-                    "LessonID": i + 1,
-                    "Student": student,
-                    "LessonDate": lesson_date
-                })
+                add_lesson(student, lesson_date)
+                imported += 1
             except Exception:
                 continue
 
-        return pd.DataFrame(rows)
+        st.success(f"Imported {imported} lessons")
 
-    raise ValueError("Unrecognized Excel format")
-
-def merge_data(existing, new):
-    combined = pd.concat([existing, new], ignore_index=True)
-    combined = combined.drop_duplicates(
-        subset=["Student", "LessonDate"]
-    )
-    return combined
-
-# -------------------------
-# UI
-# -------------------------
-st.title("Lesson Reports")
-
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📥 Import Excel",
-    "📊 Student report",
-    "📆 Monthly export",
-    "📅 Yearly export"
-])
-
-# -------------------------
-# TAB 1 — IMPORT
-# -------------------------
-with tab1:
-    st.subheader("Import Excel (monthly or yearly)")
-
-    import_type = st.radio(
-        "Excel type",
-        ["Monthly report", "Yearly report"]
-    )
-
-    year = month = None
-    if import_type == "Monthly report":
-        year = st.number_input("Year", 2020, 2100, date.today().year)
-        month = st.number_input("Month", 1, 12, date.today().month)
-
-    uploaded = st.file_uploader("Upload Excel (.xlsx)", type=["xlsx"])
-
-    if uploaded:
-        file_bytes = uploaded.getvalue()
-        file_id = file_hash(file_bytes)
-
-        if file_id in st.session_state.imported_files:
-            st.error("This Excel file was already imported.")
-        else:
-            try:
-                df_new = load_excel(
-                    io.BytesIO(file_bytes),
-                    year=year,
-                    month=month
-                )
-                st.session_state.data = merge_data(
-                    st.session_state.data,
-                    df_new
-                )
-                st.session_state.imported_files.add(file_id)
-                st.success(f"Imported {len(df_new)} lessons")
-            except Exception as e:
-                st.error(str(e))
-
-# -------------------------
-# TAB 2 — REPORT
-# -------------------------
+# =====================
+# TAB 2 — EXPORT MONTHLY
+# =====================
 with tab2:
-    st.subheader("Student report")
+    st.subheader("Export monthly Excel")
 
-    df = st.session_state.data
+    year = st.number_input("Export year", 2020, 2100, date.today().year, key="em_y")
+    month = st.number_input("Export month", 1, 12, date.today().month, key="em_m")
 
-    if df.empty:
-        st.info("No data loaded")
-    else:
-        students = sorted(df["Student"].unique())
-        student = st.selectbox("Select student", students)
+    df = load_lessons()
+    df = df[
+        (df["lesson_date"].dt.year == year) &
+        (df["lesson_date"].dt.month == month)
+    ].sort_values(["student", "lesson_date"])
 
-        student_df = df[df["Student"] == student].copy()
-        student_df["YearMonth"] = student_df["LessonDate"].dt.to_period("M")
-
-        for period, group in student_df.groupby("YearMonth"):
-            st.markdown(f"### {period}")
-            group = group.sort_values("LessonDate")
-
-            for i, d in enumerate(group["LessonDate"], start=1):
-                st.write(f"{i}) {d.strftime('%d.%m.%Y')}")
-
-            st.write(f"**Total: {len(group)} lessons**")
-
-        st.markdown(
-            f"### Year total: **{len(student_df)} lessons**"
-        )
-
-# -------------------------
-# TAB 3 — MONTHLY EXPORT
-# -------------------------
-with tab3:
-    st.subheader("Monthly Excel export")
-
-    year = st.number_input("Export year", 2020, 2100, date.today().year, key="exp_y")
-    month = st.number_input("Export month", 1, 12, date.today().month, key="exp_m")
-
-    df = st.session_state.data
-    mask = (
-        (df["LessonDate"].dt.year == year) &
-        (df["LessonDate"].dt.month == month)
-    )
-    month_df = df[mask].sort_values(["Student", "LessonDate"])
-
-    if not month_df.empty:
+    if not df.empty:
         rows = []
-        for student, group in month_df.groupby("Student"):
-            for i, d in enumerate(group["LessonDate"], start=1):
+        for student, group in df.groupby("student"):
+            for i, d in enumerate(group["lesson_date"], start=1):
                 rows.append([i, student, d.day])
 
         export_df = pd.DataFrame(
@@ -194,28 +113,54 @@ with tab3:
         export_df.to_excel(output, index=False)
 
         st.download_button(
-            "Download monthly Excel",
+            "Download Excel",
             data=output.getvalue(),
             file_name=f"lessons_{year}_{month}.xlsx"
         )
     else:
         st.info("No lessons for this month")
 
-# -------------------------
-# TAB 4 — YEARLY EXPORT
-# -------------------------
+# =====================
+# TAB 3 — IMPORT YEARLY
+# =====================
+with tab3:
+    st.subheader("Import yearly Excel")
+
+    uploaded = st.file_uploader(
+        "Yearly Excel (.xlsx)",
+        type=["xlsx"],
+        key="year_import"
+    )
+
+    if uploaded and st.button("Import yearly"):
+        df = pd.read_excel(uploaded)
+
+        df["LessonDate"] = pd.to_datetime(df["LessonDate"])
+
+        for _, row in df.iterrows():
+            add_lesson(row["Student"], row["LessonDate"])
+
+        st.success(f"Imported {len(df)} lessons")
+
+# =====================
+# TAB 4 — EXPORT YEARLY
+# =====================
 with tab4:
-    st.subheader("Yearly Excel export")
+    st.subheader("Export yearly Excel")
 
-    year = st.number_input("Year", 2020, 2100, date.today().year, key="yearly")
+    year = st.number_input("Year", 2020, 2100, date.today().year, key="ey")
 
-    year_df = st.session_state.data[
-        st.session_state.data["LessonDate"].dt.year == year
-    ].sort_values("LessonDate")
+    df = load_lessons()
+    df = df[df["lesson_date"].dt.year == year].sort_values("lesson_date")
 
-    if not year_df.empty:
+    if not df.empty:
+        export_df = df.rename(columns={
+            "student": "Student",
+            "lesson_date": "LessonDate"
+        })[["Student", "LessonDate"]]
+
         output = io.BytesIO()
-        year_df.to_excel(output, index=False)
+        export_df.to_excel(output, index=False)
 
         st.download_button(
             "Download yearly Excel",
@@ -224,3 +169,58 @@ with tab4:
         )
     else:
         st.info("No data for selected year")
+
+# =====================
+# TAB 5 — STUDENT REPORT
+# =====================
+with tab5:
+    st.subheader("Student report")
+
+    df = load_lessons()
+
+    if df.empty:
+        st.info("No data")
+    else:
+        students = sorted(df["student"].unique())
+        student = st.selectbox("Select student", students)
+
+        student_df = df[df["student"] == student].copy()
+        student_df["YearMonth"] = student_df["lesson_date"].dt.to_period("M")
+
+        rows = []
+        for period, group in student_df.groupby("YearMonth"):
+            st.markdown(f"### {period}")
+            for i, d in enumerate(group["lesson_date"], start=1):
+                st.write(f"{i}) {d.strftime('%d.%m.%Y')}")
+            st.write(f"**Total: {len(group)} lessons**")
+
+            for d in group["lesson_date"]:
+                rows.append([student, d])
+
+        # EXPORT STUDENT REPORT
+        export_df = pd.DataFrame(
+            rows,
+            columns=["Student", "LessonDate"]
+        )
+
+        output = io.BytesIO()
+        export_df.to_excel(output, index=False)
+
+        st.download_button(
+            "Download student report",
+            data=output.getvalue(),
+            file_name=f"{student}_report.xlsx"
+        )
+
+        # ---------- MERGE STUDENTS ----------
+        st.divider()
+        st.subheader("Merge students (fix spelling)")
+
+        other = st.selectbox(
+            "Merge this name into current student",
+            [s for s in students if s != student]
+        )
+
+        if st.button("Merge"):
+            merge_students(other, student)
+            st.success(f"Merged '{other}' into '{student}'")
