@@ -1,23 +1,29 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
-from datetime import date, datetime
+from datetime import date
 import io
 
-# =====================
-# DATABASE (SESSION)
-# =====================
-conn = sqlite3.connect(":memory:", check_same_thread=False)
-cursor = conn.cursor()
+st.set_page_config(page_title="Lesson Reports", layout="centered")
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS lessons (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    student TEXT NOT NULL,
-    lesson_date DATE NOT NULL
-)
-""")
-conn.commit()
+# =====================
+# DATABASE (SESSION SAFE)
+# =====================
+if "conn" not in st.session_state:
+    st.session_state.conn = sqlite3.connect(":memory:", check_same_thread=False)
+    st.session_state.cursor = st.session_state.conn.cursor()
+
+    st.session_state.cursor.execute("""
+    CREATE TABLE IF NOT EXISTS lessons (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        student TEXT NOT NULL,
+        lesson_date DATE NOT NULL
+    )
+    """)
+    st.session_state.conn.commit()
+
+conn = st.session_state.conn
+cursor = st.session_state.cursor
 
 # =====================
 # DB HELPERS
@@ -25,7 +31,7 @@ conn.commit()
 def add_lesson(student, lesson_date):
     cursor.execute(
         "INSERT INTO lessons (student, lesson_date) VALUES (?, ?)",
-        (student, lesson_date)
+        (student.strip(), lesson_date)
     )
     conn.commit()
 
@@ -36,10 +42,10 @@ def load_lessons():
         parse_dates=["lesson_date"]
     )
 
-def merge_students(old_name, new_name):
+def merge_students(source, target):
     cursor.execute(
         "UPDATE lessons SET student = ? WHERE student = ?",
-        (new_name, old_name)
+        (target, source)
     )
     conn.commit()
 
@@ -48,12 +54,13 @@ def merge_students(old_name, new_name):
 # =====================
 st.title("Lesson Reports")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📥 Import Monthly",
     "📤 Export Monthly",
     "📥 Import Yearly",
     "📤 Export Yearly",
-    "📊 Student Report"
+    "📊 Student Report",
+    "🔗 Merge Students"
 ])
 
 # =====================
@@ -89,8 +96,8 @@ with tab1:
 with tab2:
     st.subheader("Export monthly Excel")
 
-    year = st.number_input("Export year", 2020, 2100, date.today().year, key="em_y")
-    month = st.number_input("Export month", 1, 12, date.today().month, key="em_m")
+    year = st.number_input("Year", 2020, 2100, date.today().year, key="em_y")
+    month = st.number_input("Month", 1, 12, date.today().month, key="em_m")
 
     df = load_lessons()
     df = df[
@@ -98,7 +105,9 @@ with tab2:
         (df["lesson_date"].dt.month == month)
     ].sort_values(["student", "lesson_date"])
 
-    if not df.empty:
+    if df.empty:
+        st.info("No lessons for selected month")
+    else:
         rows = []
         for student, group in df.groupby("student"):
             for i, d in enumerate(group["lesson_date"], start=1):
@@ -117,8 +126,6 @@ with tab2:
             data=output.getvalue(),
             file_name=f"lessons_{year}_{month}.xlsx"
         )
-    else:
-        st.info("No lessons for this month")
 
 # =====================
 # TAB 3 — IMPORT YEARLY
@@ -126,19 +133,14 @@ with tab2:
 with tab3:
     st.subheader("Import yearly Excel")
 
-    uploaded = st.file_uploader(
-        "Yearly Excel (.xlsx)",
-        type=["xlsx"],
-        key="year_import"
-    )
+    uploaded = st.file_uploader("Yearly Excel (.xlsx)", type=["xlsx"], key="year_imp")
 
     if uploaded and st.button("Import yearly"):
         df = pd.read_excel(uploaded)
-
         df["LessonDate"] = pd.to_datetime(df["LessonDate"])
 
         for _, row in df.iterrows():
-            add_lesson(row["Student"], row["LessonDate"])
+            add_lesson(row["Student"], row["LessonDate"].date())
 
         st.success(f"Imported {len(df)} lessons")
 
@@ -153,7 +155,9 @@ with tab4:
     df = load_lessons()
     df = df[df["lesson_date"].dt.year == year].sort_values("lesson_date")
 
-    if not df.empty:
+    if df.empty:
+        st.info("No data for selected year")
+    else:
         export_df = df.rename(columns={
             "student": "Student",
             "lesson_date": "LessonDate"
@@ -167,8 +171,6 @@ with tab4:
             data=output.getvalue(),
             file_name=f"lessons_{year}.xlsx"
         )
-    else:
-        st.info("No data for selected year")
 
 # =====================
 # TAB 5 — STUDENT REPORT
@@ -188,16 +190,16 @@ with tab5:
         student_df["YearMonth"] = student_df["lesson_date"].dt.to_period("M")
 
         rows = []
+
         for period, group in student_df.groupby("YearMonth"):
             st.markdown(f"### {period}")
             for i, d in enumerate(group["lesson_date"], start=1):
-                st.write(f"{i}) {d.strftime('%d.%m.%Y')}")
+                st.write(f"{i}. {d.strftime('%d.%m.%Y')}")
             st.write(f"**Total: {len(group)} lessons**")
 
             for d in group["lesson_date"]:
                 rows.append([student, d])
 
-        # EXPORT STUDENT REPORT
         export_df = pd.DataFrame(
             rows,
             columns=["Student", "LessonDate"]
@@ -212,15 +214,30 @@ with tab5:
             file_name=f"{student}_report.xlsx"
         )
 
-        # ---------- MERGE STUDENTS ----------
-        st.divider()
-        st.subheader("Merge students (fix spelling)")
+# =====================
+# TAB 6 — MERGE STUDENTS
+# =====================
+with tab6:
+    st.subheader("Merge students (manual)")
 
-        other = st.selectbox(
-            "Merge this name into current student",
-            [s for s in students if s != student]
-        )
+    df = load_lessons()
 
-        if st.button("Merge"):
-            merge_students(other, student)
-            st.success(f"Merged '{other}' into '{student}'")
+    if df.empty:
+        st.info("No data")
+    else:
+        students = sorted(df["student"].unique())
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            source = st.selectbox("Merge FROM (wrong spelling)", students)
+
+        with col2:
+            target = st.selectbox(
+                "Merge INTO (correct name)",
+                [s for s in students if s != source]
+            )
+
+        if st.button("Merge students"):
+            merge_students(source, target)
+            st.success(f"Merged '{source}' into '{target}'")
