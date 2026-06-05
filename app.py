@@ -67,28 +67,77 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 # TAB 1 — IMPORT MONTHLY
 # =====================
 with tab1:
-    st.subheader("Import monthly Excel")
+    st.subheader("Smart Import monthly Excel")
 
     year = st.number_input("Year", 2020, 2100, date.today().year)
     month = st.number_input("Month", 1, 12, date.today().month)
 
     uploaded = st.file_uploader("Excel file (.xlsx)", type=["xlsx"])
 
-    if uploaded and st.button("Import"):
+    def normalize_columns(df):
+        df.columns = [
+            str(c).strip().lower()
+            .replace(" ", "_")
+            for c in df.columns
+        ]
+        return df
+
+    def find_column(df, keywords):
+        for col in df.columns:
+            for k in keywords:
+                if k in col:
+                    return col
+        return None
+
+    if uploaded:
         df = pd.read_excel(uploaded)
 
-        imported = 0
-        for _, row in df.iterrows():
-            try:
-                student = str(row[1]).strip()
-                day = int(float(row[2]))
-                lesson_date = date(year, month, day)
-                add_lesson(student, lesson_date)
-                imported += 1
-            except Exception:
-                continue
+        st.write("📄 Preview file:")
+        st.dataframe(df.head())
 
-        st.success(f"Imported {imported} lessons")
+        df = normalize_columns(df)
+
+        st.write("🔎 Normalized columns:", df.columns.tolist())
+
+        student_col = find_column(df, ["student", "uczen", "uczeń", "name", "imie", "imię"])
+        day_col = find_column(df, ["day", "date", "lesson", "dzień", "dzien", "data"])
+
+        if not student_col or not day_col:
+            st.error("❌ Could not detect required columns (Student / Day)")
+            st.stop()
+
+        st.success(f"Detected columns → Student: {student_col}, Day: {day_col}")
+
+        if st.button("Import"):
+            imported = 0
+            errors = []
+
+            for i, row in df.iterrows():
+                try:
+                    student = str(row[student_col]).strip()
+
+                    value = row[day_col]
+
+                    # 🧠 CASE 1: Excel date
+                    if isinstance(value, pd.Timestamp):
+                        lesson_date = value.date()
+
+                    # 🧠 CASE 2: numeric day (1–31)
+                    else:
+                        day = int(float(value))
+                        lesson_date = date(year, month, day)
+
+                    add_lesson(student, lesson_date)
+                    imported += 1
+
+                except Exception as e:
+                    errors.append(f"Row {i}: {e}")
+
+            st.success(f"Imported {imported} lessons")
+
+            if errors:
+                st.warning("Some rows failed:")
+                st.write(errors[:20])
 
 # =====================
 # TAB 2 — EXPORT MONTHLY
